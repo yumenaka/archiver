@@ -596,14 +596,15 @@ func (z *Zip) Extract(source, target, destination string) error {
 			// either this is the exact file we want, or is
 			// in the directory we want to extract
 
-			// build the filename we will extract to
-			end, err := filepath.Rel(targetDirPath, zfh.Name)
-			if err != nil {
-				return fmt.Errorf("relativizing paths: %v", err)
-			}
-			joined := filepath.Join(destination, end)
-
-			err = z.extractFile(f, joined, &zfh)
+			err := z.extractFile(f, destination, &zfh)
+			//// build the filename we will extract to
+			//end, err := filepath.Rel(targetDirPath, zfh.Name)
+			//if err != nil {
+			//	return fmt.Errorf("relativizing paths: %v", err)
+			//}
+			//joined := filepath.Join(destination, end)
+			//
+			//err = z.extractFile(f, joined, &zfh)
 			if err != nil {
 				return fmt.Errorf("extracting file %s: %v", zfh.Name, err)
 			}
