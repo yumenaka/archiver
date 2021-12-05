@@ -58,7 +58,9 @@ type Rar struct {
 
 // CheckExt ensures the file extension matches the format.
 func (*Rar) CheckExt(filename string) error {
-	if (!strings.HasSuffix(filename, ".rar") && (!strings.HasSuffix(filename, ".cbr")) {
+	var not_rar = !strings.HasSuffix(filename, ".rar")
+	var not_cbr = !strings.HasSuffix(filename, ".cbr")
+	if not_rar && not_cbr {
 		return fmt.Errorf("filename must have a .rar or .cbr extension")
 	}
 	return nil

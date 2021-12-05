@@ -9,3 +9,7 @@ builds/
 *.test
 .*.sw*
 *.idea
+
+*.cbz
+*.cbr
+test
