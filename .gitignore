@@ -8,3 +8,4 @@ _gitignore
 builds/
 *.test
 .*.sw*
+*.idea
