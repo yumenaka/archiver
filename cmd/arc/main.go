@@ -24,6 +24,7 @@ var (
 	stripComponents        int
 	continueOnError        bool
 	specifyFileType        string
+	filenameEncoding       string
 )
 
 var (
@@ -41,6 +42,7 @@ func init() {
 	flag.IntVar(&stripComponents, "strip-components", 0, "Strip number of leading paths")
 	flag.BoolVar(&continueOnError, "allow-errors", true, "Log errors and continue processing")
 	flag.StringVar(&specifyFileType, "ext", "", "specify file type")
+	flag.StringVar(&filenameEncoding, "filename-encoding", "", "Specify encoding if filename was not utf8 encoded")
 }
 
 func main() {
@@ -266,6 +268,7 @@ func getFormat(subcommand string) (interface{}, error) {
 		v.ImplicitTopLevelFolder = implicitTopLevelFolder
 		v.StripComponents = stripComponents
 		v.ContinueOnError = continueOnError
+		v.FilenameEncoding = filenameEncoding
 	case *archiver.Gz:
 		v.CompressionLevel = compressionLevel
 	case *archiver.Brotli:

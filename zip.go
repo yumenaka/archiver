@@ -78,6 +78,9 @@ type Zip struct {
 	// or writing a single file will be logged and
 	// the operation will continue on remaining files.
 	ContinueOnError bool
+	// If zip.FileHeader.NonUTF8 was true, this can be
+	// used to decode filename to utf8
+	FilenameEncoding string
 
 	// Compression algorithm
 	FileMethod ZipCompressionMethod
@@ -273,7 +276,9 @@ func (z *Zip) extractNext(to string) error {
 }
 
 func (z *Zip) extractFile(f File, to string, header *zip.FileHeader) error {
-	to = filepath.Join(to, header.Name)
+	//to = filepath.Join(to, header.Name)
+	filename := z.DecodeFileName(*header)
+	to = filepath.Join(to, filename)
 
 	// if a directory, no content; simply make the directory and return
 	if f.IsDir() {
@@ -547,6 +552,7 @@ func (z *Zip) Walk(archive string, walkFn WalkFunc) error {
 			}
 			return fmt.Errorf("opening %s: %v", zf.Name, err)
 		}
+		zf.FileHeader.Name = z.DecodeFileName(zf.FileHeader)
 
 		err = walkFn(File{
 			FileInfo:   zf.FileInfo(),
@@ -586,6 +592,7 @@ func (z *Zip) Extract(source, target, destination string) error {
 		if !ok {
 			return fmt.Errorf("expected header to be zip.FileHeader but was %T", f.Header)
 		}
+		zfh.Name = z.DecodeFileName(zfh)
 
 		// importantly, cleaning the path strips tailing slash,
 		// which must be appended to folders within the archive
@@ -644,6 +651,15 @@ func (*Zip) Match(file io.ReadSeeker) (bool, error) {
 		return false, nil
 	}
 	return bytes.Equal(buf, []byte("PK\x03\x04")), nil
+}
+
+func (z *Zip) DecodeFileName(header zip.FileHeader) string {
+	if header.NonUTF8 && z.FilenameEncoding != "" {
+		if filename, err := Decode([]byte(header.Name), z.FilenameEncoding); err == nil {
+			return string(filename)
+		}
+	}
+	return header.Name
 }
 
 func (z *Zip) String() string { return "zip" }
