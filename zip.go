@@ -276,9 +276,36 @@ func (z *Zip) extractNext(to string) error {
 }
 
 func (z *Zip) extractFile(f File, to string, header *zip.FileHeader) error {
-	//to = filepath.Join(to, header.Name)
+
 	filename := z.DecodeFileName(*header)
 	to = filepath.Join(to, filename)
+
+	// if a directory, no content; simply make the directory and return
+	if f.IsDir() {
+		return mkdir(to, f.Mode())
+	}
+
+	// do not overwrite existing files, if configured
+	if !z.OverwriteExisting && fileExists(to) {
+		return fmt.Errorf("file already exists: %s", to)
+	}
+
+	// extract symbolic links as symbolic links
+	if isSymlink(header.FileInfo()) {
+		// symlink target is the contents of the file
+		buf := new(bytes.Buffer)
+		_, err := io.Copy(buf, f)
+		if err != nil {
+			return fmt.Errorf("%s: reading symlink target: %v", header.Name, err)
+		}
+		return writeNewSymbolicLink(to, strings.TrimSpace(buf.String()))
+	}
+
+	return writeNewFile(to, f, f.Mode())
+}
+
+func (z *Zip) extractFileNotDecode(f File, to string, header *zip.FileHeader) error {
+	to = filepath.Join(to, header.Name)
 
 	// if a directory, no content; simply make the directory and return
 	if f.IsDir() {
@@ -592,7 +619,8 @@ func (z *Zip) Extract(source, target, destination string) error {
 		if !ok {
 			return fmt.Errorf("expected header to be zip.FileHeader but was %T", f.Header)
 		}
-		zfh.Name = z.DecodeFileName(zfh)
+
+		//	zfh.Name = z.DecodeFileName(zfh)
 
 		// importantly, cleaning the path strips tailing slash,
 		// which must be appended to folders within the archive
@@ -605,7 +633,9 @@ func (z *Zip) Extract(source, target, destination string) error {
 			// either this is the exact file we want, or is
 			// in the directory we want to extract
 
-			err := z.extractFile(f, destination, &zfh)
+			//err := z.extractFile(f, destination, &zfh)
+			err := z.extractFileNotDecode(f, destination, &zfh)
+
 			//// build the filename we will extract to
 			//end, err := filepath.Rel(targetDirPath, zfh.Name)
 			//if err != nil {

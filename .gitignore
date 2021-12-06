@@ -13,4 +13,5 @@ builds/
 *.cbz
 *.cbr
 test
-test.zip
+test/*
+*.zip
