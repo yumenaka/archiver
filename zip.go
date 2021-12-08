@@ -94,7 +94,8 @@ type Zip struct {
 func (*Zip) CheckExt(filename string) error {
 	var not_zip = !strings.HasSuffix(filename, ".zip")
 	var not_cbz = !strings.HasSuffix(filename, ".cbz")
-	if not_zip && not_cbz {
+	var not_epub = !strings.HasSuffix(filename, ".epub")
+	if not_zip && not_cbz && not_epub {
 		return fmt.Errorf("filename must have a .zip or .cbz extension")
 	}
 	return nil
