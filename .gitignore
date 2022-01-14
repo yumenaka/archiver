@@ -1,5 +1,7 @@
 _gitignore
 builds/
+
+
 *.test
 .*.sw*
 *.idea
@@ -9,4 +11,5 @@ builds/
 test
 test/*
 *.zip
+memo.txt
 
