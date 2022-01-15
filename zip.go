@@ -125,10 +125,13 @@ func (z Zip) Archive(ctx context.Context, output io.Writer, files []File) error 
 		if err != nil {
 			return fmt.Errorf("getting info for file %d: %s: %w", i, file.Name(), err)
 		}
+		hdr.Name = file.NameInArchive // complete path, since FileInfoHeader() only has base name
 
 		// customize header based on file properties
 		if file.IsDir() {
-			hdr.Name += "/" // required - strangely no mention of this in zip spec? but is in godoc...
+			if !strings.HasSuffix(hdr.Name, "/") {
+				hdr.Name += "/" // required
+			}
 			hdr.Method = zip.Store
 		} else if z.SelectiveCompression {
 			// only enable compression on compressable files
@@ -190,15 +193,16 @@ func (z Zip) Extract(ctx context.Context, sourceArchive io.Reader, pathsInArchiv
 		if err := ctx.Err(); err != nil {
 			return err // honor context cancellation
 		}
+
+		// ensure filename and comment are UTF-8 encoded (issue #147 and PR #305)
+		z.decodeText(&f.FileHeader)
+
 		if !fileIsIncluded(pathsInArchive, f.Name) {
 			continue
 		}
 		if fileIsIncluded(skipDirs, f.Name) {
 			continue
 		}
-
-		// ensure filename and comment are UTF-8 encoded (issue #147)
-		z.decodeText(&f.FileHeader)
 
 		file := File{
 			FileInfo:      f.FileInfo(),
@@ -212,7 +216,7 @@ func (z Zip) Extract(ctx context.Context, sourceArchive io.Reader, pathsInArchiv
 			// if a directory, skip this path; if a file, skip the folder path
 			dirPath := f.Name
 			if !file.IsDir() {
-				dirPath = path.Dir(f.Name)
+				dirPath = path.Dir(f.Name) + "/"
 			}
 			skipDirs.add(dirPath)
 		} else if err != nil {
@@ -352,7 +356,8 @@ var encodings = map[string]encoding.Encoding{
 }
 
 // decodeText returns UTF-8 encoded text from the given charset.
-// Thanks to @zxdvd for contributing non-UTF-8 encoding logic in #149.
+// Thanks to @zxdvd for contributing non-UTF-8 encoding logic in
+// #149, and to @pashifika for helping in #305.
 func decodeText(input, charset string) (string, error) {
 	if enc, ok := encodings[charset]; ok {
 		return enc.NewDecoder().String(input)
@@ -360,4 +365,4 @@ func decodeText(input, charset string) (string, error) {
 	return "", fmt.Errorf("unrecognized charset %s", charset)
 }
 
-var zipHeader = []byte("PK\x03\x04") // TODO: headers of empty zip files might end with 0x05,0x06 or 0x06,0x06 instead of 0x03,0x04
+var zipHeader = []byte("PK\x03\x04") // NOTE: headers of empty zip files might end with 0x05,0x06 or 0x06,0x06 instead of 0x03,0x04
