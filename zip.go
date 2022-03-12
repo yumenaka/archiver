@@ -243,6 +243,62 @@ func (z Zip) Extract(ctx context.Context, sourceArchive io.Reader, pathsInArchiv
 			return fmt.Errorf("handling file %d: %s: %w", i, f.Name, err)
 		}
 	}
+	return nil
+}
+
+func (z Zip) LsAllFile(ctx context.Context, sourceArchive io.Reader, handleFile FileHandler) error {
+	sra, ok := sourceArchive.(seekReaderAt)
+	if !ok {
+		return fmt.Errorf("input type must be an io.ReaderAt and io.Seeker because of zip format constraints")
+	}
+
+	size, err := streamSizeBySeeking(sra)
+	if err != nil {
+		return fmt.Errorf("determining stream size: %w", err)
+	}
+
+	zr, err := zip.NewReader(sra, size)
+	if err != nil {
+		return err
+	}
+
+	// important to initialize to non-nil, empty value due to how fileIsIncluded works
+	skipDirs := skipList{}
+
+	for i, f := range zr.File {
+		if err := ctx.Err(); err != nil {
+			return err // honor context cancellation
+		}
+
+		// ensure filename and comment are UTF-8 encoded (issue #147 and PR #305)
+		z.decodeText(&f.FileHeader)
+
+		//if !fileIsIncluded(pathsInArchive, f.Name) {
+		//	continue
+		//}
+		if fileIsIncluded(skipDirs, f.Name) {
+			continue
+		}
+
+		file := File{
+			FileInfo:      f.FileInfo(),
+			Header:        f.FileHeader,
+			NameInArchive: f.Name,
+			Open:          func() (io.ReadCloser, error) { return f.Open() },
+		}
+
+		err := handleFile(ctx, file)
+		if errors.Is(err, fs.SkipDir) {
+			// if a directory, skip this path; if a file, skip the folder path
+			dirPath := f.Name
+			if !file.IsDir() {
+				dirPath = path.Dir(f.Name) + "/"
+			}
+			skipDirs.add(dirPath)
+		} else if err != nil {
+			return fmt.Errorf("handling file %d: %s: %w", i, f.Name, err)
+		}
+	}
 
 	return nil
 }

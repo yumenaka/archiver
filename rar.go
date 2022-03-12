@@ -122,6 +122,66 @@ func (r Rar) Extract(ctx context.Context, sourceArchive io.Reader, pathsInArchiv
 	return nil
 }
 
+func (r Rar) LsAllFile(ctx context.Context, sourceArchive io.Reader, handleFile FileHandler) error {
+	var options []rardecode.Option
+	if r.Password != "" {
+		options = append(options, rardecode.Password(r.Password))
+	}
+
+	rr, err := rardecode.NewReader(sourceArchive, options...)
+	if err != nil {
+		return err
+	}
+
+	// important to initialize to non-nil, empty value due to how fileIsIncluded works
+	skipDirs := skipList{}
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return err // honor context cancellation
+		}
+
+		hdr, err := rr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			if r.ContinueOnError {
+				log.Printf("[ERROR] Advancing to next file in rar archive: %v", err)
+				continue
+			}
+			return err
+		}
+		//if !fileIsIncluded(pathsInArchive, hdr.Name) {
+		//	continue
+		//}
+		if fileIsIncluded(skipDirs, hdr.Name) {
+			continue
+		}
+
+		file := File{
+			FileInfo:      rarFileInfo{hdr},
+			Header:        hdr,
+			NameInArchive: hdr.Name,
+			Open:          func() (io.ReadCloser, error) { return io.NopCloser(rr), nil },
+		}
+
+		err = handleFile(ctx, file)
+		if errors.Is(err, fs.SkipDir) {
+			// if a directory, skip this path; if a file, skip the folder path
+			dirPath := hdr.Name
+			if !hdr.IsDir {
+				dirPath = path.Dir(hdr.Name) + "/"
+			}
+			skipDirs.add(dirPath)
+		} else if err != nil {
+			return fmt.Errorf("handling file: %s: %w", hdr.Name, err)
+		}
+	}
+
+	return nil
+}
+
 // rarFileInfo satisfies the fs.FileInfo interface for RAR entries.
 type rarFileInfo struct {
 	fh *rardecode.FileHeader
