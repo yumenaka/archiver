@@ -246,28 +246,28 @@ func (z Zip) Extract(ctx context.Context, sourceArchive io.Reader, pathsInArchiv
 	return nil
 }
 
-func (z Zip) LsAllFile(ctx context.Context, sourceArchive io.Reader, handleFile FileHandler) error {
+func (z Zip) LsAllFile(ctx context.Context, sourceArchive io.Reader, handleFile FileHandler) (reader *zip.Reader, err error) {
 	sra, ok := sourceArchive.(seekReaderAt)
 	if !ok {
-		return fmt.Errorf("input type must be an io.ReaderAt and io.Seeker because of zip format constraints")
+		return reader, fmt.Errorf("input type must be an io.ReaderAt and io.Seeker because of zip format constraints")
 	}
 
 	size, err := streamSizeBySeeking(sra)
 	if err != nil {
-		return fmt.Errorf("determining stream size: %w", err)
+		return reader, fmt.Errorf("determining stream size: %w", err)
 	}
 
 	zr, err := zip.NewReader(sra, size)
 	if err != nil {
-		return err
+		return reader, err
 	}
-
+	reader = zr
 	// important to initialize to non-nil, empty value due to how fileIsIncluded works
 	skipDirs := skipList{}
 
 	for i, f := range zr.File {
 		if err := ctx.Err(); err != nil {
-			return err // honor context cancellation
+			return reader, err // honor context cancellation
 		}
 
 		// ensure filename and comment are UTF-8 encoded (issue #147 and PR #305)
@@ -296,11 +296,11 @@ func (z Zip) LsAllFile(ctx context.Context, sourceArchive io.Reader, handleFile 
 			}
 			skipDirs.add(dirPath)
 		} else if err != nil {
-			return fmt.Errorf("handling file %d: %s: %w", i, f.Name, err)
+			return reader, fmt.Errorf("handling file %d: %s: %w", i, f.Name, err)
 		}
 	}
 
-	return nil
+	return reader, nil
 }
 
 // decodeText decodes the name and comment fields from hdr into UTF-8.
