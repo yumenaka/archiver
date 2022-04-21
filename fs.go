@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // FileSystem opens the file at root as a read-only file system. The root may be a
@@ -249,9 +250,9 @@ func (f ArchiveFS) Open(name string) (fs.File, error) {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
 	}
 
-	var archiveFile *os.File
+	var archiveFile fs.File
 	var err error
-	if f.Stream == nil {
+	if f.Path != "" {
 		archiveFile, err = os.Open(f.Path)
 		if err != nil {
 			return nil, err
@@ -264,6 +265,8 @@ func (f ArchiveFS) Open(name string) (fs.File, error) {
 				archiveFile.Close()
 			}
 		}()
+	} else if f.Stream != nil {
+		archiveFile = fakeArchiveFile{}
 	}
 
 	// apply prefix if fs is rooted in a subtree
@@ -363,12 +366,16 @@ func (f ArchiveFS) Stat(name string) (fs.FileInfo, error) {
 	// apply prefix if fs is rooted in a subtree
 	name = path.Join(f.Prefix, name)
 
-	if name == "." && f.Path != "" {
-		fileInfo, err := os.Stat(f.Path)
-		if err != nil {
-			return nil, err
+	if name == "." {
+		if f.Path != "" {
+			fileInfo, err := os.Stat(f.Path)
+			if err != nil {
+				return nil, err
+			}
+			return dirFileInfo{fileInfo}, nil
+		} else if f.Stream != nil {
+			return implicitDirInfo{implicitDirEntry{name}}, nil
 		}
-		return dirFileInfo{fileInfo}, nil
 	}
 
 	var archiveFile *os.File
@@ -388,7 +395,7 @@ func (f ArchiveFS) Stat(name string) (fs.FileInfo, error) {
 		// created depth-first (i.e. directory contents added before the
 		// directory itself), in which case we have to iterate through the
 		// contents first; hence the check for exact filename match (issue #310)
-		if file.NameInArchive == name {
+		if strings.TrimRight(file.NameInArchive, "/") == strings.TrimRight(name, "/") {
 			result = file
 			return errStopWalk
 		}
@@ -427,7 +434,8 @@ func (f ArchiveFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	// apply prefix if fs is rooted in a subtree
 	name = path.Join(f.Prefix, name)
 
-	var entries []fs.DirEntry
+	// store entries in a map to inexpensively avoid duplication
+	entries := make(map[string]fs.DirEntry)
 	handler := func(_ context.Context, file File) error {
 		// directories may end with trailing slash; standardize name
 		trimmedName := strings.Trim(file.NameInArchive, "/")
@@ -437,16 +445,32 @@ func (f ArchiveFS) ReadDir(name string) ([]fs.DirEntry, error) {
 			return nil
 		}
 
-		// items added to an archive depth-first results in the subfolder file being
+		// items added to an archive depth-first results in the subfolder entry being
 		// added to the archive after all the files within it, meaning we won't have
-		// the chance to return SkipDir before traversing into it, so we have to also
+		// the chance to return SkipDir before traversing into it; so we have to also
 		// check if we are within a subfolder deeper than the requested name (because
 		// this is a ReadDir function, we do not intend to traverse subfolders) (issue #310)
-		if path.Dir(strings.TrimSuffix(file.NameInArchive, "/")) != name {
+		// in other words, archive entries can be created out-of-(breadth-first)-order,
+		// or even an arbitrary/random order, and we need to make sure we get all entries
+		// in just this directory
+		if path.Dir(trimmedName) != name {
+			// additionally, some archive files don't have actual entries for folders,
+			// leaving them to be inferred from the names of files instead (issue #330)
+			// so as we traverse deeper, we need to implicitly find subfolders within
+			// this current directory and add fake entries to the output
+			remainingPath := strings.TrimPrefix(file.NameInArchive, name)
+			nextDir := topDir(remainingPath)        // if name in archive is "a/b/c" and root is "a", this becomes "b" (the implied folder to add)
+			implicitDir := path.Join(name, nextDir) // the full path of the implied directory
+
+			// create fake entry only if no entry currently exists (don't overwrite a real entry)
+			if _, ok := entries[implicitDir]; !ok {
+				entries[implicitDir] = implicitDirEntry{implicitDir}
+			}
+
 			return fs.SkipDir
 		}
 
-		entries = append(entries, fs.FileInfoToDirEntry(file))
+		entries[file.NameInArchive] = fs.FileInfoToDirEntry(file)
 
 		// don't traverse deeper into subfolders
 		if file.IsDir() {
@@ -468,7 +492,17 @@ func (f ArchiveFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	}
 
 	err = f.Format.Extract(f.context(), inputStream, filter, handler)
-	return entries, err
+	if err != nil {
+		return nil, err
+	}
+
+	// convert map to slice
+	entriesSlice := make([]fs.DirEntry, 0, len(entries))
+	for _, ent := range entries {
+		entriesSlice = append(entriesSlice, ent)
+	}
+
+	return entriesSlice, nil
 }
 
 // Sub returns an FS corresponding to the subtree rooted at dir.
@@ -559,6 +593,16 @@ func pathWithoutTopDir(fpath string) string {
 // traversed during the walk.
 var errStopWalk = fmt.Errorf("stop walk")
 
+type fakeArchiveFile struct{}
+
+func (f fakeArchiveFile) Stat() (fs.FileInfo, error) {
+	return implicitDirInfo{
+		implicitDirEntry{name: "."},
+	}, nil
+}
+func (f fakeArchiveFile) Read([]byte) (int, error) { return 0, io.EOF }
+func (f fakeArchiveFile) Close() error             { return nil }
+
 // dirFile implements the fs.ReadDirFile interface.
 type dirFile struct {
 	extractedFile
@@ -640,6 +684,35 @@ func (ef extractedFile) Close() error {
 	}
 	return nil
 }
+
+// implicitDirEntry represents a directory that does
+// not actually exist in the archive but is inferred
+// from the paths of actual files in the archive.
+type implicitDirEntry struct {
+	name string
+}
+
+func (e implicitDirEntry) Name() string    { return e.name }
+func (implicitDirEntry) IsDir() bool       { return true }
+func (implicitDirEntry) Type() fs.FileMode { return fs.ModeDir }
+func (e implicitDirEntry) Info() (fs.FileInfo, error) {
+	return implicitDirInfo{e}, nil
+}
+
+// implicitDirInfo is a fs.FileInfo for an implicit directory
+// (implicitDirEntry) value. This is used when an archive may
+// not contain actual entries for a directory, but we need to
+// pretend it exists so its contents can be discovered and
+// traversed.
+type implicitDirInfo struct {
+	implicitDirEntry
+}
+
+func (d implicitDirInfo) Name() string      { return d.name }
+func (implicitDirInfo) Size() int64         { return 0 }
+func (d implicitDirInfo) Mode() fs.FileMode { return d.Type() }
+func (implicitDirInfo) ModTime() time.Time  { return time.Time{} }
+func (implicitDirInfo) Sys() interface{}    { return nil }
 
 // Interface guards
 var (
