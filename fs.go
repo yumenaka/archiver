@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/klauspost/compress/zip"
 )
 
 // FileSystem opens the file at root as a read-only file system. The root may be a
@@ -28,9 +30,9 @@ import (
 // directories, archives, compressed archives, and individual files are all treated
 // the same way.
 //
-// The returned FS values are guaranteed to be fs.ReadDirFS and fs.StatFS types, and
-// may also be fs.SubFS.
-func FileSystem(root string) (fs.FS, error) {
+// Except for zip files, the returned FS values are guaranteed to be fs.ReadDirFS and
+// fs.StatFS types, and may also be fs.SubFS.
+func FileSystem(ctx context.Context, root string) (fs.FS, error) {
 	info, err := os.Stat(root)
 	if err != nil {
 		return nil, err
@@ -47,17 +49,31 @@ func FileSystem(root string) (fs.FS, error) {
 		return nil, err
 	}
 	defer file.Close()
+
 	format, _, err := Identify(filepath.Base(root), file)
 	if err != nil && !errors.Is(err, ErrNoMatch) {
 		return nil, err
 	}
+
 	if format != nil {
-		// TODO: we only really need Extractor and Decompressor here, not the combined interfaces...
-		if af, ok := format.(Archival); ok {
-			return ArchiveFS{Path: root, Format: af}, nil
-		}
-		if cf, ok := format.(Compression); ok {
-			return FileFS{Path: root, Compression: cf}, nil
+		switch ff := format.(type) {
+		case Zip:
+			// zip.Reader is more performant than ArchiveFS, because zip.Reader caches content information
+			// and zip.Reader can open several content files concurrently because of io.ReaderAt requirement
+			// while ArchiveFS can't.
+			// zip.Reader doesn't suffer from issue #330 and #310 according to local test (but they should be fixed anyway)
+
+			// open the file anew, as our original handle will be closed when we return
+			file, err := os.Open(root)
+			if err != nil {
+				return nil, err
+			}
+			return zip.NewReader(file, info.Size())
+		case Archival:
+			// TODO: we only really need Extractor and Decompressor here, not the combined interfaces...
+			return ArchiveFS{Path: root, Format: ff, Context: ctx}, nil
+		case Compression:
+			return FileFS{Path: root, Compression: ff}, nil
 		}
 	}
 
@@ -565,21 +581,21 @@ func TopDirOpen(fsys fs.FS, name string) (fs.File, error) {
 }
 
 // TopDirStat is like TopDirOpen but for Stat.
-func TopDirStat(fsys fs.StatFS, name string) (fs.FileInfo, error) {
-	info, err := fsys.Stat(name)
+func TopDirStat(fsys fs.FS, name string) (fs.FileInfo, error) {
+	info, err := fs.Stat(fsys, name)
 	if err == nil {
 		return info, nil
 	}
-	return fsys.Stat(pathWithoutTopDir(name))
+	return fs.Stat(fsys, pathWithoutTopDir(name))
 }
 
 // TopDirReadDir is like TopDirOpen but for ReadDir.
-func TopDirReadDir(fsys fs.ReadDirFS, name string) ([]fs.DirEntry, error) {
-	entries, err := fsys.ReadDir(name)
+func TopDirReadDir(fsys fs.FS, name string) ([]fs.DirEntry, error) {
+	entries, err := fs.ReadDir(fsys, name)
 	if err == nil {
 		return entries, nil
 	}
-	return fsys.ReadDir(pathWithoutTopDir(name))
+	return fs.ReadDir(fsys, pathWithoutTopDir(name))
 }
 
 func pathWithoutTopDir(fpath string) string {

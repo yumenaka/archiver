@@ -1,7 +1,6 @@
 package archiver
 
 import (
-	"archive/zip"
 	"bytes"
 	"context"
 	"errors"
@@ -13,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/dsnet/compress/bzip2"
+	"github.com/klauspost/compress/zip"
 	"github.com/klauspost/compress/zstd"
 	"github.com/ulikunitz/xz"
 	"golang.org/x/text/encoding"
@@ -240,6 +240,10 @@ func (z Zip) Extract(ctx context.Context, sourceArchive io.Reader, pathsInArchiv
 			}
 			skipDirs.add(dirPath)
 		} else if err != nil {
+			if z.ContinueOnError {
+				log.Printf("[ERROR] %s: %v", f.Name, err)
+				continue
+			}
 			return fmt.Errorf("handling file %d: %s: %w", i, f.Name, err)
 		}
 	}
